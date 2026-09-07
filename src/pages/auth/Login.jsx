@@ -10,7 +10,7 @@ function Login() {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
-  async function checkFacultyProfile() {
+  async function checkUserProfile() {
     const {
       data: { user },
       error: userError,
@@ -20,7 +20,11 @@ function Login() {
       return
     }
 
-    const { data: faculty, error: facultyError } = await supabase
+    // Check faculty profile first
+    const {
+      data: faculty,
+      error: facultyError,
+    } = await supabase
       .from('faculties')
       .select('id, name, college_name, college_email, college_domain')
       .eq('auth_user_id', user.id)
@@ -37,17 +41,45 @@ function Login() {
       navigate('/faculty/dashboard', {
         replace: true,
       })
-    } else {
-      console.log('Authenticated user has no faculty profile')
 
-      navigate('/faculty/setup', {
+      return
+    }
+
+    // Check student profile
+    const {
+      data: student,
+      error: studentError,
+    } = await supabase
+      .from('students')
+      .select('id, name, roll_number, email')
+      .eq('auth_user_id', user.id)
+      .maybeSingle()
+
+    if (studentError) {
+      console.error('Student profile lookup failed:', studentError)
+      return
+    }
+
+    if (student) {
+      console.log('Student profile exists:', student)
+
+      navigate('/student/dashboard', {
         replace: true,
       })
+
+      return
     }
+
+    // Authenticated user has neither profile
+    console.log('Authenticated user has no faculty or student profile')
+
+    navigate('/account/setup', {
+      replace: true,
+    })
   }
 
   useEffect(() => {
-    checkFacultyProfile()
+    checkUserProfile()
   }, [])
 
   async function handleSubmit(event) {
@@ -69,7 +101,7 @@ function Login() {
 
     console.log('Login successful')
 
-    await checkFacultyProfile()
+    await checkUserProfile()
 
     setLoading(false)
   }
@@ -96,7 +128,7 @@ function Login() {
       <div className="w-full max-w-md">
 
         <h1 className="text-3xl font-bold text-center mb-8">
-          Faculty Login
+          Login
         </h1>
 
         <form
@@ -106,7 +138,7 @@ function Login() {
 
           <input
             type="email"
-            placeholder="College Email"
+            placeholder="Email"
             value={email}
             onChange={(event) => setEmail(event.target.value)}
             className="w-full border rounded-lg px-4 py-3"
@@ -159,16 +191,31 @@ function Login() {
           Continue with Google
         </button>
 
-        <p className="text-center mt-6">
-          Don't have a faculty account?{' '}
-          <button
-            type="button"
-            onClick={() => navigate('/register')}
-            className="font-medium underline"
-          >
-            Register
-          </button>
-        </p>
+        <div className="text-center mt-6 space-y-3">
+          <p className="text-gray-600">
+            New here?
+          </p>
+
+          <div className="flex items-center justify-center gap-4 text-sm">
+            <button
+              type="button"
+              onClick={() => navigate('/register')}
+              className="font-medium underline"
+            >
+              Faculty Registration
+            </button>
+
+            <span className="text-gray-400">|</span>
+
+            <button
+              type="button"
+              onClick={() => navigate('/student/register')}
+              className="font-medium underline"
+            >
+              Student Registration
+            </button>
+          </div>
+        </div>
 
       </div>
     </div>

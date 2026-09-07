@@ -44,7 +44,14 @@ function Register() {
       })
 
       if (error) {
-        setError(error.message)
+        if (error.message.toLowerCase().includes('password')) {
+          setError(
+            'Password must contain lowercase, uppercase, digits and special case'
+          )
+        } else {
+          setError(error.message)
+        }
+
         return
       }
 
