@@ -7,6 +7,8 @@ import {
 
 import Login from './pages/auth/Login'
 import Register from './pages/auth/Register'
+import FacultySetup from './pages/faculty/FacultySetup'
+import FacultyDashboard from './pages/faculty/FacultyDashboard'
 import { supabase } from './lib/supabase'
 
 function App() {
@@ -28,6 +30,15 @@ function App() {
         <Route
           path="/register"
           element={<Register />}
+        />
+        <Route
+          path="/faculty/setup"
+          element={<FacultySetup />}
+        />
+
+        <Route
+          path="/faculty/dashboard"
+          element={<FacultyDashboard />}
         />
       </Routes>
     </BrowserRouter>
