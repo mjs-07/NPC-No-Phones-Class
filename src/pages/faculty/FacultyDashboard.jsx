@@ -6,7 +6,10 @@ function FacultyDashboard() {
   const navigate = useNavigate()
 
   const [faculty, setFaculty] = useState(null)
+  const [activeSession, setActiveSession] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [startingSession, setStartingSession] = useState(false)
+  const [sessionError, setSessionError] = useState('')
 
   useEffect(() => {
     async function loadFacultyProfile() {
@@ -39,11 +42,88 @@ function FacultyDashboard() {
       }
 
       setFaculty(data)
+
+      // Check whether this faculty already has an active session.
+      const { data: session, error: sessionError } = await supabase
+        .from('sessions')
+        .select('id, status, started_at, ended_at')
+        .eq('faculty_id', data.id)
+        .eq('status', 'ACTIVE')
+        .maybeSingle()
+
+      if (sessionError) {
+        console.error('Active session lookup failed:', sessionError)
+      } else {
+        setActiveSession(session)
+      }
+
       setLoading(false)
     }
 
     loadFacultyProfile()
   }, [navigate])
+
+  async function handleStartSession() {
+    setStartingSession(true)
+    setSessionError('')
+
+    try {
+      const { data, error } = await supabase.functions.invoke(
+        'create-session',
+        {
+          method: 'POST',
+          body: {},
+        }
+      )
+
+      if (error) {
+        console.error('Create session failed:', error)
+
+        setSessionError(
+          error.message || 'Unable to start classroom session.'
+        )
+
+        return
+      }
+
+      if (!data?.session) {
+        setSessionError('Session was not created correctly.')
+        return
+      }
+
+      setActiveSession(data.session)
+    } catch (error) {
+      console.error('Unexpected session creation error:', error)
+
+      setSessionError('Unable to start classroom session.')
+    } finally {
+      setStartingSession(false)
+    }
+  }
+
+  async function handleTestQr() {
+    if (!activeSession) {
+      console.error('No active session available.')
+      return
+    }
+
+    const { data, error } = await supabase.functions.invoke(
+      'generate-qr',
+      {
+        method: 'POST',
+        body: {
+          session_id: activeSession.id,
+        },
+      }
+    )
+
+    if (error) {
+      console.error('Generate QR failed:', error)
+      return
+    }
+
+    console.log('Generated QR token:', data)
+  }
 
   async function handleLogout() {
     await supabase.auth.signOut()
@@ -103,16 +183,74 @@ function FacultyDashboard() {
 
         <div className="grid gap-6 md:grid-cols-3">
 
+          {/* Classroom Session */}
           <div className="rounded-xl border bg-white p-6">
+
             <h3 className="font-semibold text-lg">
               Classroom Session
             </h3>
 
-            <p className="text-sm text-gray-500 mt-2">
-              Start and manage your classroom session.
-            </p>
+            {activeSession ? (
+              <div className="mt-4 space-y-3">
+
+                <div className="flex items-center gap-2">
+                  <span className="h-3 w-3 rounded-full bg-green-500" />
+
+                  <span className="font-medium">
+                    Session Active
+                  </span>
+                </div>
+
+                <p className="text-sm text-gray-500">
+                  Started at:{' '}
+                  {new Date(
+                    activeSession.started_at
+                  ).toLocaleString()}
+                </p>
+
+                <p className="text-xs text-gray-400 break-all">
+                  Session ID: {activeSession.id}
+                </p>
+
+                <button
+                  type="button"
+                  onClick={handleTestQr}
+                  className="rounded-lg bg-black text-white px-5 py-3 font-medium"
+                >
+                  Test QR Generation
+                </button>
+
+              </div>
+            ) : (
+              <div className="mt-4">
+
+                <p className="text-sm text-gray-500 mb-4">
+                  No active classroom session.
+                </p>
+
+                {sessionError && (
+                  <p className="text-sm text-red-600 mb-4">
+                    {sessionError}
+                  </p>
+                )}
+
+                <button
+                  type="button"
+                  onClick={handleStartSession}
+                  disabled={startingSession}
+                  className="rounded-lg bg-black text-white px-5 py-3 font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {startingSession
+                    ? 'Starting...'
+                    : 'Start Session'}
+                </button>
+
+              </div>
+            )}
+
           </div>
 
+          {/* Students */}
           <div className="rounded-xl border bg-white p-6">
             <h3 className="font-semibold text-lg">
               Students
@@ -123,6 +261,7 @@ function FacultyDashboard() {
             </p>
           </div>
 
+          {/* Reports */}
           <div className="rounded-xl border bg-white p-6">
             <h3 className="font-semibold text-lg">
               Reports
