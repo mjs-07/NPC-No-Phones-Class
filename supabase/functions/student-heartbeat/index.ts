@@ -1,8 +1,11 @@
-
 import "@supabase/functions-js/edge-runtime.d.ts";
 import { withSupabase } from "npm:@supabase/server@1";
 
 const GRACE_PERIOD_MS = 5000;
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 export default {
   fetch: withSupabase(
@@ -60,9 +63,6 @@ export default {
 
       const now = new Date();
       const nowIso = now.toISOString();
-      const cutoffIso = new Date(
-        now.getTime() - GRACE_PERIOD_MS
-      ).toISOString();
 
       // Resolve the authenticated student's profile.
       const { data: student, error: studentError } =
@@ -123,13 +123,14 @@ export default {
         return Response.json(
           {
             error: "Participation is no longer active",
+            status: participant.status,
             logout_reason: "ALREADY_LOGGED_OUT",
           },
           { status: 409 }
         );
       }
 
-      // An approved pause is not treated as a tab-switch violation.
+      // Approved pause is not treated as a tab-switch violation.
       if (participant.status === "PAUSED") {
         const { error } = await ctx.supabaseAdmin
           .from("session_participants")
@@ -154,14 +155,18 @@ export default {
         });
       }
 
-      // If the hidden interval has already exceeded five seconds,
-      // returning or sending another heartbeat cannot cancel it.
+      // If already hidden for more than five seconds,
+      // this request cannot cancel the timeout.
       const overdue =
         participant.hidden_at !== null &&
         new Date(participant.hidden_at).getTime() <=
           now.getTime() - GRACE_PERIOD_MS;
 
       if (overdue) {
+        const cutoffIso = new Date(
+          now.getTime() - GRACE_PERIOD_MS
+        ).toISOString();
+
         const { data: loggedOut, error } =
           await ctx.supabaseAdmin
             .from("session_participants")
@@ -187,17 +192,13 @@ export default {
         }
 
         if (loggedOut) {
-          return Response.json(
-            {
-              success: true,
-              status: "LOGGED_OUT",
-              logout_reason: "TAB_SWITCH",
-            },
-            { status: 200 }
-          );
+          return Response.json({
+            success: true,
+            status: "LOGGED_OUT",
+            logout_reason: "TAB_SWITCH",
+          });
         }
 
-        // Another server operation may have changed the status first.
         const { data: latest, error: latestError } =
           await ctx.supabaseAdmin
             .from("session_participants")
@@ -222,20 +223,28 @@ export default {
         );
       }
 
+      // --------------------------------------------------
+      // HIDDEN: record hidden_at, wait five seconds on the
+      // server, then independently enforce TAB_SWITCH.
+      // --------------------------------------------------
       if (action === "hidden") {
-        // Record the first hidden event; repeated events must not
-        // restart the student's grace-period timer.
-        if (participant.hidden_at === null) {
-          const { error } = await ctx.supabaseAdmin
-            .from("session_participants")
-            .update({
-              hidden_at: nowIso,
-              last_seen: nowIso,
-            })
-            .eq("id", participant.id)
-            .eq("student_id", student.id)
-            .eq("status", "ACTIVE")
-            .is("hidden_at", null);
+        let hiddenAt = participant.hidden_at;
+
+        // Record only the first hidden event.
+        if (hiddenAt === null) {
+          const { data: updated, error } =
+            await ctx.supabaseAdmin
+              .from("session_participants")
+              .update({
+                hidden_at: nowIso,
+                last_seen: nowIso,
+              })
+              .eq("id", participant.id)
+              .eq("student_id", student.id)
+              .eq("status", "ACTIVE")
+              .is("hidden_at", null)
+              .select("hidden_at")
+              .maybeSingle();
 
           if (error) {
             console.error("Hidden event update failed:", error);
@@ -245,26 +254,158 @@ export default {
               { status: 500 }
             );
           }
+
+          if (!updated) {
+            // Another event may have changed the participant.
+            const { data: latest, error: latestError } =
+              await ctx.supabaseAdmin
+                .from("session_participants")
+                .select("status, hidden_at, logout_reason")
+                .eq("id", participant.id)
+                .maybeSingle();
+
+            if (latestError) {
+              return Response.json(
+                { error: "Unable to verify hidden state" },
+                { status: 500 }
+              );
+            }
+
+            if (latest?.status !== "ACTIVE") {
+              return Response.json(
+                {
+                  success: false,
+                  status: latest?.status ?? "UNKNOWN",
+                  logout_reason: latest?.logout_reason ?? null,
+                },
+                { status: 409 }
+              );
+            }
+
+            hiddenAt = latest?.hidden_at ?? null;
+          } else {
+            hiddenAt = updated.hidden_at;
+          }
+        }
+
+        if (!hiddenAt) {
+          return Response.json({
+            success: true,
+            status: "ACTIVE",
+            hidden: true,
+          });
+        }
+
+        // Server-side grace period. This does not depend on
+        // the student returning to the dashboard.
+        const hiddenTimestamp = new Date(hiddenAt).getTime();
+        const elapsed = Date.now() - hiddenTimestamp;
+        const remaining = Math.max(
+          0,
+          GRACE_PERIOD_MS - elapsed
+        );
+
+        if (remaining > 0) {
+          await delay(remaining);
+        }
+
+        const enforcementTime = new Date();
+        const enforcementIso = enforcementTime.toISOString();
+        const cutoffIso = new Date(
+          enforcementTime.getTime() - GRACE_PERIOD_MS
+        ).toISOString();
+
+        /*
+         * Logout only if:
+         * - still ACTIVE
+         * - hidden_at is still the same hidden event
+         * - hidden_at is at least five seconds old
+         *
+         * If a visible event cleared hidden_at, this update
+         * will not match.
+         */
+        const { data: loggedOut, error: logoutError } =
+          await ctx.supabaseAdmin
+            .from("session_participants")
+            .update({
+              status: "LOGGED_OUT",
+              logout_at: enforcementIso,
+              logout_reason: "TAB_SWITCH",
+            })
+            .eq("id", participant.id)
+            .eq("session_id", session_id)
+            .eq("student_id", student.id)
+            .eq("status", "ACTIVE")
+            .eq("hidden_at", hiddenAt)
+            .lte("hidden_at", cutoffIso)
+            .select("id")
+            .maybeSingle();
+
+        if (logoutError) {
+          console.error(
+            "Delayed tab-switch enforcement failed:",
+            logoutError
+          );
+
+          return Response.json(
+            { error: "Unable to enforce tab-switch timeout" },
+            { status: 500 }
+          );
+        }
+
+        if (loggedOut) {
+          return Response.json({
+            success: true,
+            status: "LOGGED_OUT",
+            logout_reason: "TAB_SWITCH",
+          });
+        }
+
+        // The student may have returned, been paused,
+        // or logged out by another server operation.
+        const { data: latest, error: latestError } =
+          await ctx.supabaseAdmin
+            .from("session_participants")
+            .select("status, hidden_at, logout_reason")
+            .eq("id", participant.id)
+            .maybeSingle();
+
+        if (latestError) {
+          return Response.json(
+            { error: "Unable to verify participation after grace period" },
+            { status: 500 }
+          );
         }
 
         return Response.json({
           success: true,
-          status: "ACTIVE",
-          hidden: true,
+          status: latest?.status ?? "UNKNOWN",
+          hidden: latest?.hidden_at !== null,
+          logout_reason: latest?.logout_reason ?? null,
         });
       }
 
+      // --------------------------------------------------
+      // VISIBLE: returning within five seconds clears the
+      // hidden marker. An overdue marker cannot be cleared.
+      // --------------------------------------------------
       if (action === "visible") {
-        // Returning within the grace period clears the hidden marker.
-        const { error } = await ctx.supabaseAdmin
-          .from("session_participants")
-          .update({
-            hidden_at: null,
-            last_seen: nowIso,
-          })
-          .eq("id", participant.id)
-          .eq("student_id", student.id)
-          .eq("status", "ACTIVE");
+        const { data: updated, error } =
+          await ctx.supabaseAdmin
+            .from("session_participants")
+            .update({
+              hidden_at: null,
+              last_seen: nowIso,
+            })
+            .eq("id", participant.id)
+            .eq("student_id", student.id)
+            .eq("status", "ACTIVE")
+            .not("hidden_at", "is", null)
+            .gt("hidden_at", new Date(
+              now.getTime() - GRACE_PERIOD_MS
+            ).toISOString())
+            .select("id")
+            .maybeSingle();
 
         if (error) {
           console.error("Visible event update failed:", error);
@@ -275,9 +416,20 @@ export default {
           );
         }
 
+        // If no hidden marker existed, record the heartbeat.
+        if (!updated && participant.hidden_at === null) {
+          await ctx.supabaseAdmin
+            .from("session_participants")
+            .update({ last_seen: nowIso })
+            .eq("id", participant.id)
+            .eq("student_id", student.id)
+            .eq("status", "ACTIVE")
+            .is("hidden_at", null);
+        }
+
         return Response.json({
           success: true,
-          status: "ACTIVE",
+          status: updated ? "ACTIVE" : "CHECKING",
           hidden: false,
         });
       }

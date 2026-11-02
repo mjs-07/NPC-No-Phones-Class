@@ -1,10 +1,110 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import QRCode from 'qrcode'
 import { supabase } from '../../lib/supabase'
 import FacultyPauseRequests from '../../components/faculty/FacultyPauseRequests'
 
 const QR_REFRESH_INTERVAL_MS = 5000
+
+function csvEscape(value) {
+  const text = String(value ?? '')
+  return `"${text.replace(/"/g, '""')}"`
+}
+
+function formatTimeOnly(value) {
+  if (!value) return ''
+
+  return new Date(value).toLocaleTimeString('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+    second: '2-digit',
+  })
+}
+
+function getTotalTimePresentMinutes(loginAt, logoutAt, pausedSeconds) {
+  if (!loginAt || !logoutAt) return ''
+
+  const loginMs = new Date(loginAt).getTime()
+  const logoutMs = new Date(logoutAt).getTime()
+
+  const elapsedSeconds = Math.max(
+    0,
+    (logoutMs - loginMs) / 1000
+  )
+
+  const presentSeconds = Math.max(
+    0,
+    elapsedSeconds - Number(pausedSeconds || 0)
+  )
+
+  // Whole minutes, rounded to the nearest minute.
+  return Math.round(presentSeconds / 60)
+}
+
+function downloadAttendanceCsv(session, attendance) {
+  const headers = [
+    'Roll Number',
+    'Student Name',
+    'Login Time',
+    'Logout Time',
+    'Paused Seconds',
+    'Logout Reason',
+    'Total Time Present (minutes)',
+  ]
+
+  const sortedAttendance = [...attendance].sort((a, b) =>
+    String(a.roll_number ?? '').localeCompare(
+      String(b.roll_number ?? ''),
+      undefined,
+      { numeric: true, sensitivity: 'base' }
+    )
+  )
+
+  const rows = sortedAttendance.map((student) => [
+    student.roll_number,
+    student.student_name,
+    formatTimeOnly(student.login_at),
+    formatTimeOnly(student.logout_at),
+    Number(student.total_paused_seconds || 0),
+    student.logout_reason,
+    getTotalTimePresentMinutes(
+      student.login_at,
+      student.logout_at,
+      student.total_paused_seconds
+    ),
+  ])
+
+  const csvContent = [
+    headers.map(csvEscape).join(','),
+    ...rows.map((row) => row.map(csvEscape).join(',')),
+  ].join('\r\n')
+
+  // BOM helps Excel display UTF-8 correctly.
+  const blob = new Blob(
+    ['\uFEFF', csvContent],
+    { type: 'text/csv;charset=utf-8;' }
+  )
+
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+
+  const sessionName = (session.session_name || 'Session')
+    .trim()
+    .replace(/[<>:"/\\|?*]+/g, '')
+    .replace(/\s+/g, '_')
+
+  const sessionDate = new Date(session.started_at)
+    .toLocaleDateString('en-CA')
+
+  link.href = url
+  link.download = `${sessionName}_${sessionDate}.csv`
+
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+
+  URL.revokeObjectURL(url)
+}
 
 function FacultyDashboard() {
   const navigate = useNavigate()
@@ -17,6 +117,8 @@ function FacultyDashboard() {
 
   const [loading, setLoading] = useState(true)
   const [startingSession, setStartingSession] = useState(false)
+  const [showStartSessionModal, setShowStartSessionModal] = useState(false)
+  const [sessionName, setSessionName] = useState('')
   const [endingSession, setEndingSession] = useState(false)
   const [qrLoading, setQrLoading] = useState(false)
 
@@ -25,6 +127,7 @@ function FacultyDashboard() {
 
   // Student monitoring
   const [participants, setParticipants] = useState([])
+  const realtimeParticipantUpdates = useRef(new Map())
   const [participantsLoading, setParticipantsLoading] = useState(false)
   const [participantsError, setParticipantsError] = useState('')
 
@@ -80,7 +183,7 @@ function FacultyDashboard() {
       } = await supabase
         .from('sessions')
         .select(
-          'id, status, started_at, ended_at'
+          'id, session_name, status, started_at, ended_at'
         )
         .eq('faculty_id', data.id)
         .eq('status', 'ACTIVE')
@@ -114,6 +217,12 @@ function FacultyDashboard() {
    */
 
   async function handleStartSession() {
+    const trimmedSessionName = sessionName.trim()
+    if (!trimmedSessionName) {
+      setSessionError('Please enter a session name.')
+      return
+    }
+
     setStartingSession(true)
     setSessionError('')
 
@@ -125,7 +234,7 @@ function FacultyDashboard() {
         'create-session',
         {
           method: 'POST',
-          body: {},
+          body: { session_name: trimmedSessionName },
         }
       )
 
@@ -152,6 +261,8 @@ function FacultyDashboard() {
       }
 
       setActiveSession(data.session)
+      setShowStartSessionModal(false)
+      setSessionName('')
     } catch (error) {
       console.error(
         'Unexpected session creation error:',
@@ -204,30 +315,31 @@ function FacultyDashboard() {
       )
 
       if (error) {
-        console.error(
-          'End session failed:',
-          error
-        )
+        console.error('End session failed:', error)
 
         setSessionError(
-          error.message ||
-            'Unable to end classroom session.'
+          error.message || 'Unable to end classroom session.'
         )
-
         return
       }
 
-      console.log(
-        'Classroom session ended:',
-        data
+      if (
+        !data?.session ||
+        !Array.isArray(data.attendance)
+      ) {
+        setSessionError(
+          'Session ended, but the attendance report could not be generated.'
+        )
+        return
+      }
+
+      downloadAttendanceCsv(
+        data.session,
+        data.attendance
       )
 
-      /*
-       * Removing activeSession automatically
-       * stops the QR scheduler through its cleanup.
-       */
       setActiveSession(null)
-
+      setParticipants([])
       setCurrentQr(null)
       setQrSecondsLeft(0)
       setQrError('')
@@ -248,13 +360,6 @@ function FacultyDashboard() {
   /*
    * ------------------------------------------------------------------
    * GENERATE QR PAIR
-   *
-   * Backend returns:
-   *
-   * current = currently valid QR
-   * next    = next 20-second QR
-   *
-   * Both QR images are generated immediately in the browser.
    * ------------------------------------------------------------------
    */
 
@@ -302,12 +407,6 @@ function FacultyDashboard() {
       )
     }
 
-    /*
-     * Generate both QR images immediately.
-     *
-     * This means the browser does not need to
-     * generate the next QR during rotation.
-     */
     const [
       currentImage,
       nextImage,
@@ -331,10 +430,6 @@ function FacultyDashboard() {
       ),
     ])
 
-    /*
-     * Calculate the difference between server time
-     * and this browser's clock.
-     */
     const serverTimeMs =
       new Date(data.server_time).getTime()
 
@@ -365,9 +460,6 @@ function FacultyDashboard() {
   /*
    * ------------------------------------------------------------------
    * QR SCHEDULER
-   *
-   * The backend defines the exact QR expiry time.
-   * The browser schedules the visual switch for that timestamp.
    * ------------------------------------------------------------------
    */
 
@@ -388,16 +480,7 @@ function FacultyDashboard() {
     let preparedNextQr = null
     let serverClockOffsetMs = 0
 
-    /*
-     * Prevent overlapping refresh requests.
-     */
     let refreshInProgress = false
-
-    /*
-     * --------------------------------------------------------------
-     * CLEAR TIMERS
-     * --------------------------------------------------------------
-     */
 
     function clearRotationTimer() {
       if (rotationTimeoutId !== null) {
@@ -420,21 +503,9 @@ function FacultyDashboard() {
       }
     }
 
-    /*
-     * --------------------------------------------------------------
-     * SERVER-ALIGNED NOW
-     * --------------------------------------------------------------
-     */
-
     function getServerNowMs() {
       return Date.now() + serverClockOffsetMs
     }
-
-    /*
-     * --------------------------------------------------------------
-     * COUNTDOWN
-     * --------------------------------------------------------------
-     */
 
     function startCountdown(qr) {
       clearCountdownTimer()
@@ -463,21 +534,11 @@ function FacultyDashboard() {
 
       updateCountdown()
 
-      /*
-       * 250ms is only for updating the visual
-       * countdown. It does NOT control QR rotation.
-       */
       countdownId = setInterval(
         updateCountdown,
         250
       )
     }
-
-    /*
-     * --------------------------------------------------------------
-     * SCHEDULE ROTATION
-     * --------------------------------------------------------------
-     */
 
     function scheduleRotation(
       currentQr,
@@ -496,10 +557,6 @@ function FacultyDashboard() {
         nextQr.startsAt.getTime() -
         nowMs
 
-      /*
-       * If the next QR's start time has already
-       * passed, do not wait.
-       */
       const delay = Math.max(
         0,
         switchInMs
@@ -511,36 +568,15 @@ function FacultyDashboard() {
             return
           }
 
-          /*
-           * The next QR was already generated
-           * before this moment.
-           *
-           * Therefore this switch requires
-           * NO network request.
-           */
           setCurrentQr(nextQr)
 
           startCountdown(nextQr)
 
-          /*
-           * The QR currently being displayed is now
-           * the previously prepared next QR.
-           */
           preparedNextQr = null
 
-          /*
-           * Immediately attempt to obtain the
-           * following QR pair in the background.
-           */
           refreshQrData()
         }, delay)
     }
-
-    /*
-     * --------------------------------------------------------------
-     * REFRESH QR DATA
-     * --------------------------------------------------------------
-     */
 
     async function refreshQrData() {
       if (
@@ -563,9 +599,6 @@ function FacultyDashboard() {
           return
         }
 
-        /*
-         * Update clock synchronization.
-         */
         serverClockOffsetMs =
           pair.serverClockOffsetMs
 
@@ -578,21 +611,10 @@ function FacultyDashboard() {
         const nextQr =
           pair.next
 
-        /*
-         * If the returned current QR is already
-         * expired according to our server-aligned
-         * clock, ignore it.
-         */
         if (
           currentQr.expiresAt.getTime() <=
           nowMs
         ) {
-          /*
-           * We are slightly behind the server.
-           *
-           * The returned next QR may already be
-           * the correct QR to display.
-           */
           if (
             nextQr.startsAt.getTime() <=
             nowMs &&
@@ -611,9 +633,6 @@ function FacultyDashboard() {
           return
         }
 
-        /*
-         * Update the displayed QR.
-         */
         setCurrentQr(
           (previousQr) => {
             if (
@@ -628,14 +647,8 @@ function FacultyDashboard() {
           }
         )
 
-        /*
-         * Store the next QR in memory.
-         */
         preparedNextQr = nextQr
 
-        /*
-         * Schedule the exact transition.
-         */
         scheduleRotation(
           currentQr,
           nextQr
@@ -647,10 +660,6 @@ function FacultyDashboard() {
         )
 
         if (!cancelled) {
-          /*
-           * Do not blank the QR because of a
-           * temporary network problem.
-           */
           setQrError(
             error.message ||
               'Unable to refresh QR code.'
@@ -660,12 +669,6 @@ function FacultyDashboard() {
         refreshInProgress = false
       }
     }
-
-    /*
-     * --------------------------------------------------------------
-     * INITIALIZE QR
-     * --------------------------------------------------------------
-     */
 
     async function initializeQr() {
       setQrLoading(true)
@@ -688,10 +691,6 @@ function FacultyDashboard() {
         const nowMs =
           getServerNowMs()
 
-        /*
-         * Normally the backend's current QR
-         * should still be valid.
-         */
         if (
           pair.current.expiresAt.getTime() >
           nowMs
@@ -717,12 +716,6 @@ function FacultyDashboard() {
           pair.next.expiresAt.getTime() >
             nowMs
         ) {
-          /*
-           * The request arrived right around
-           * a rotation boundary.
-           *
-           * The backend's next QR is now current.
-           */
           setCurrentQr(
             pair.next
           )
@@ -733,10 +726,6 @@ function FacultyDashboard() {
 
           preparedNextQr = null
 
-          /*
-           * Immediately fetch another pair so
-           * we have a future QR ready.
-           */
           await refreshQrData()
         } else {
           throw new Error(
@@ -744,10 +733,6 @@ function FacultyDashboard() {
           )
         }
 
-        /*
-         * Background refresh every 5 seconds.
-         * This does not control QR rotation.
-         */
         refreshIntervalId =
           setInterval(
             refreshQrData,
@@ -774,12 +759,6 @@ function FacultyDashboard() {
 
     initializeQr()
 
-    /*
-     * --------------------------------------------------------------
-     * CLEANUP
-     * --------------------------------------------------------------
-     */
-
     return () => {
       cancelled = true
 
@@ -795,6 +774,9 @@ function FacultyDashboard() {
   /*
    * ------------------------------------------------------------------
    * LIVE STUDENT MONITORING
+   *
+   * RPC loads participant details.
+   * Realtime is authoritative for participant status changes.
    * ------------------------------------------------------------------
    */
 
@@ -803,6 +785,7 @@ function FacultyDashboard() {
       setParticipants([])
       setParticipantsError('')
       setParticipantsLoading(false)
+      realtimeParticipantUpdates.current.clear()
       return
     }
 
@@ -811,11 +794,12 @@ function FacultyDashboard() {
 
     const sessionId = activeSession.id
 
-    async function loadParticipants() {
+    async function loadParticipants(source = 'manual') {
       if (cancelled) return
 
-      setParticipantsLoading(true)
-      setParticipantsError('')
+      console.log(
+        `[NPC Realtime] Loading participants (${source})`
+      )
 
       try {
         const { data, error } = await supabase.rpc(
@@ -825,16 +809,35 @@ function FacultyDashboard() {
           }
         )
 
-        if (error) {
-          throw error
-        }
+        if (error) throw error
+
+        const rows = data || []
+
+        console.log(
+          '[NPC Realtime] RPC participant data:',
+          rows
+        )
 
         if (!cancelled) {
-          setParticipants(data || [])
+          // Preserve latest Realtime values over potentially stale RPC snapshots.
+          setParticipants(
+            rows.map((participant) => {
+              const realtimeUpdate =
+                realtimeParticipantUpdates.current.get(
+                  participant.participant_id
+                )
+
+              return realtimeUpdate
+                ? { ...participant, ...realtimeUpdate }
+                : participant
+            })
+          )
+
+          setParticipantsError('')
         }
       } catch (error) {
         console.error(
-          'Failed to load session participants:',
+          '[NPC Realtime] RPC load failed:',
           error
         )
 
@@ -851,12 +854,27 @@ function FacultyDashboard() {
       }
     }
 
-    // Load participants immediately.
-    loadParticipants()
+    setParticipantsLoading(true)
+    setParticipantsError('')
 
-    // Subscribe to changes for this session only.
+    // Initial participant fetch.
+    loadParticipants('initial')
+
+    const channelName =
+      `faculty-session-${sessionId}`
+
+    console.log(
+      '[NPC Realtime] Creating channel:',
+      channelName
+    )
+
+    console.log(
+      '[NPC Realtime] Session filter:',
+      sessionId
+    )
+
     const channel = supabase
-      .channel(`faculty-session-${sessionId}`)
+      .channel(channelName)
       .on(
         'postgres_changes',
         {
@@ -865,22 +883,103 @@ function FacultyDashboard() {
           table: 'session_participants',
           filter: `session_id=eq.${sessionId}`,
         },
-        () => {
-          // Debounce rapid database changes.
+        (payload) => {
+          console.log(
+            '[NPC Realtime] EVENT RECEIVED:',
+            payload.eventType,
+            payload
+          )
+
+          if (
+            payload.eventType === 'UPDATE' &&
+            payload.new?.id
+          ) {
+            const row = payload.new
+
+            const update = {
+              status: row.status,
+              logout_at: row.logout_at,
+              logout_reason: row.logout_reason,
+              hidden_at: row.hidden_at,
+              last_seen: row.last_seen,
+              paused_at: row.paused_at,
+              pause_expires_at: row.pause_expires_at,
+              total_paused_seconds:
+                row.total_paused_seconds,
+            }
+
+            // Cache server-reported values to protect against stale RPC responses.
+            realtimeParticipantUpdates.current.set(
+              row.id,
+              update
+            )
+
+            setParticipants((current) =>
+              current.map((participant) =>
+                participant.participant_id === row.id
+                  ? {
+                      ...participant,
+                      ...update,
+                    }
+                  : participant
+              )
+            )
+
+            console.log(
+              '[NPC Realtime] Applied UPDATE directly:',
+              row.id,
+              row.status,
+              row.logout_reason
+            )
+
+            // Realtime is authoritative for UPDATEs.
+            // Do not refresh through RPC after an UPDATE.
+            return
+          }
+
+          // INSERT/DELETE may change membership or require student details.
           if (reloadTimeout) {
             clearTimeout(reloadTimeout)
           }
 
           reloadTimeout = setTimeout(() => {
-            loadParticipants()
-          }, 300)
+            loadParticipants(
+              `after-${payload.eventType.toLowerCase()}`
+            )
+          }, 500)
         }
       )
-      .subscribe((status) => {
-        if (status === 'CHANNEL_ERROR') {
+      .subscribe((status, error) => {
+        console.log(
+          '[NPC Realtime] SUBSCRIPTION STATUS:',
+          status
+        )
+
+        if (error) {
           console.error(
-            'Participant Realtime subscription failed.'
+            '[NPC Realtime] SUBSCRIPTION ERROR:',
+            error
           )
+        }
+
+        if (
+          status === 'CHANNEL_ERROR' ||
+          status === 'TIMED_OUT'
+        ) {
+          console.error(
+            '[NPC Realtime] Channel failed:',
+            status,
+            error
+          )
+        }
+
+        if (status === 'SUBSCRIBED') {
+          console.log(
+            '[NPC Realtime] Successfully subscribed to session_participants'
+          )
+
+          // Refresh once subscription is active to close the initial-fetch race.
+          loadParticipants('subscription-established')
         }
       })
 
@@ -890,6 +989,11 @@ function FacultyDashboard() {
       if (reloadTimeout) {
         clearTimeout(reloadTimeout)
       }
+
+      console.log(
+        '[NPC Realtime] Removing channel:',
+        channelName
+      )
 
       supabase.removeChannel(channel)
     }
@@ -1010,6 +1114,12 @@ function FacultyDashboard() {
 
             {activeSession ? (
               <div className="mt-4 space-y-4">
+                {activeSession.session_name && (
+                  <p className="text-sm font-semibold text-gray-700">
+                    {activeSession.session_name}
+                  </p>
+                )}
+
                 {/* Session status */}
                 <div className="flex items-center gap-2">
                   <span className="h-3 w-3 rounded-full bg-green-500" />
@@ -1089,7 +1199,11 @@ function FacultyDashboard() {
 
                 <button
                   type="button"
-                  onClick={handleStartSession}
+                  onClick={() => {
+                    setSessionError('')
+                    setSessionName('')
+                    setShowStartSessionModal(true)
+                  }}
                   disabled={startingSession}
                   className="rounded-lg bg-black text-white px-5 py-3 font-medium disabled:opacity-50 disabled:cursor-not-allowed"
                 >
@@ -1249,18 +1363,96 @@ function FacultyDashboard() {
             />
           )}
 
-          {/* REPORTS */}
-          <div className="rounded-xl border bg-white p-6">
-            <h3 className="font-semibold text-lg">
-              Reports
-            </h3>
-
-            <p className="text-sm text-gray-500 mt-2">
-              Generate attendance and session reports.
-            </p>
-          </div>
         </div>
       </main>
+
+      {/* CUSTOM START SESSION MODAL */}
+      {showStartSessionModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-6"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="start-session-title"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !startingSession) {
+              setShowStartSessionModal(false)
+            }
+          }}
+        >
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
+            <div className="mb-5 flex items-start justify-between gap-4">
+              <div>
+                <p className="text-sm font-semibold uppercase tracking-wide text-gray-900">
+                  New classroom session
+                </p>
+                <h2 id="start-session-title" className="mt-1 text-2xl font-bold text-gray-900">
+                  Name this session
+                </h2>
+                <p className="mt-2 text-sm text-gray-500">
+                  Add a class or subject name to identify its attendance report.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowStartSessionModal(false)}
+                disabled={startingSession}
+                aria-label="Close modal"
+                className="rounded-lg p-2 text-gray-500 hover:bg-gray-100 disabled:opacity-50"
+              >
+                <span aria-hidden="true">×</span>
+              </button>
+            </div>
+
+            <form
+              onSubmit={(event) => {
+                event.preventDefault()
+                handleStartSession()
+              }}
+            >
+              <label htmlFor="session-name" className="mb-2 block text-sm font-medium text-gray-700">
+                Session name
+              </label>
+              <input
+                id="session-name"
+                type="text"
+                value={sessionName}
+                onChange={(event) => setSessionName(event.target.value)}
+                placeholder="e.g. DBMS - Section A"
+                maxLength={80}
+                autoFocus
+                required
+                disabled={startingSession}
+                className="w-full rounded-xl border border-gray-300 px-4 py-3 outline-none transition focus:border-gray-500 focus:ring-2 focus:ring-gray-100 disabled:bg-gray-50"
+              />
+              <p className="mt-2 text-xs text-gray-500">
+                The QR code will be generated after you start the session.
+              </p>
+
+              {sessionError && (
+                <p className="mt-3 text-sm text-red-600">{sessionError}</p>
+              )}
+
+              <div className="mt-6 flex justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => setShowStartSessionModal(false)}
+                  disabled={startingSession}
+                  className="rounded-xl border px-4 py-2.5 font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={startingSession || !sessionName.trim()}
+                  className="rounded-xl bg-gray-900 px-5 py-2.5 font-semibold text-white hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {startingSession ? 'Starting…' : 'Start Session'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
