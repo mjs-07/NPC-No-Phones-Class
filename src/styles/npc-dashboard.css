@@ -1,0 +1,217 @@
+/* NPC shared dashboard theme */
+.npc-dashboard {
+  --npc-mist: #e9ede5;
+  --npc-parchment: #f7f4ea;
+  --npc-ink: #26332d;
+  --npc-moss: #68785b;
+  --npc-terracotta: #b66e52;
+  --npc-ochre: #c5a45d;
+  --npc-stone: #b9bdb3;
+
+  min-height: 100vh;
+  color: var(--npc-ink);
+  background:
+    radial-gradient(circle at 8% 0%, #f7f4ea 0, transparent 34%),
+    var(--npc-mist);
+}
+
+/* Page surfaces */
+.npc-dashboard .bg-gray-50 {
+  background: var(--npc-mist) !important;
+}
+
+.npc-dashboard .bg-white {
+  background: var(--npc-parchment) !important;
+}
+
+.npc-dashboard header {
+  background: rgba(247, 244, 234, 0.92) !important;
+  border-color: var(--npc-stone) !important;
+  backdrop-filter: blur(12px);
+}
+
+.npc-dashboard main {
+  max-width: 1200px;
+}
+
+/* Cards */
+.npc-dashboard .rounded-xl.border,
+.npc-dashboard .rounded-2xl.bg-white {
+  border-color: var(--npc-stone) !important;
+  border-radius: 18px !important;
+  box-shadow: 0 8px 24px rgba(38, 51, 45, 0.055);
+  transition:
+    box-shadow 180ms ease,
+    transform 180ms ease;
+}
+
+.npc-dashboard .rounded-xl.border:hover {
+  box-shadow: 0 12px 28px rgba(38, 51, 45, 0.09);
+}
+
+/* Typography */
+.npc-dashboard .text-gray-900,
+.npc-dashboard .text-gray-800,
+.npc-dashboard .text-gray-700 {
+  color: var(--npc-ink) !important;
+}
+
+.npc-dashboard .text-gray-600,
+.npc-dashboard .text-gray-500 {
+  color: #667168 !important;
+}
+
+.npc-dashboard h1,
+.npc-dashboard h2,
+.npc-dashboard h3 {
+  color: var(--npc-ink);
+  letter-spacing: -0.025em;
+}
+
+/* Primary buttons */
+.npc-dashboard .bg-black,
+.npc-dashboard .bg-gray-900 {
+  background: var(--npc-ink) !important;
+  color: var(--npc-parchment) !important;
+}
+
+.npc-dashboard .hover\:bg-gray-800:hover,
+.npc-dashboard .hover\:bg-gray-900:hover {
+  background: #35463c !important;
+}
+
+.npc-dashboard button {
+  transition:
+    background-color 160ms ease,
+    border-color 160ms ease,
+    transform 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.npc-dashboard button:not(:disabled):active {
+  transform: translateY(1px);
+}
+
+.npc-dashboard button:focus-visible,
+.npc-dashboard input:focus-visible {
+  outline: 3px solid rgba(104, 120, 91, 0.35);
+  outline-offset: 2px;
+}
+
+/* Inputs and modal */
+.npc-dashboard input {
+  color: var(--npc-ink);
+  background: #fffdf7;
+  border-color: var(--npc-stone) !important;
+}
+
+.npc-dashboard input:focus {
+  border-color: var(--npc-moss) !important;
+  box-shadow: 0 0 0 3px rgba(104, 120, 91, 0.15);
+}
+
+.npc-dashboard .fixed.inset-0 > div {
+  border: 1px solid var(--npc-stone);
+  background: var(--npc-parchment) !important;
+}
+
+/* QR presentation */
+.npc-dashboard img[alt*="QR"] {
+  border: 8px solid #fffdf7 !important;
+  border-radius: 16px !important;
+  box-shadow: 0 8px 24px rgba(38, 51, 45, 0.1);
+}
+
+/* Tables */
+.npc-dashboard table {
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.npc-dashboard thead {
+  color: #667168 !important;
+  background: #eeeee5;
+}
+
+.npc-dashboard tbody tr {
+  transition: background-color 140ms ease;
+}
+
+.npc-dashboard tbody tr:hover {
+  background: rgba(104, 120, 91, 0.08);
+}
+
+.npc-dashboard th,
+.npc-dashboard td {
+  border-color: rgba(185, 189, 179, 0.65);
+}
+
+/* Status indicators */
+.npc-dashboard .bg-green-100 {
+  background: #e3eadc !important;
+}
+
+.npc-dashboard .text-green-700 {
+  color: #45613f !important;
+}
+
+.npc-dashboard .bg-yellow-100 {
+  background: #f3e9c9 !important;
+}
+
+.npc-dashboard .text-yellow-700 {
+  color: #80651f !important;
+}
+
+.npc-dashboard .bg-red-100 {
+  background: #f2dfd8 !important;
+}
+
+.npc-dashboard .text-red-700 {
+  color: #934d3b !important;
+}
+
+/* Dashboard statistic tiles */
+.npc-dashboard .bg-green-50 {
+  background: #edf1e8 !important;
+}
+
+.npc-dashboard .bg-yellow-50 {
+  background: #f7f0dc !important;
+}
+
+.npc-dashboard .bg-red-50 {
+  background: #f7eae5 !important;
+}
+
+/* Error messages */
+.npc-dashboard .border-red-200 {
+  border-color: #dfb6a8 !important;
+}
+
+.npc-dashboard .text-red-600,
+.npc-dashboard .text-red-700 {
+  color: #934d3b !important;
+}
+
+/* Small screens */
+@media (max-width: 640px) {
+  .npc-dashboard main {
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
+
+  .npc-dashboard img[alt*="QR"] {
+    width: min(100%, 320px);
+    height: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .npc-dashboard *,
+  .npc-dashboard *::before,
+  .npc-dashboard *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}

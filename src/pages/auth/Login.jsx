@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useCallback, useEffect, useState } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
 import { supabase } from '../../lib/supabase'
 
 function Login() {
@@ -10,7 +10,7 @@ function Login() {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
-  async function checkUserProfile() {
+  const checkUserProfile = useCallback(async () => {
     const {
       data: { user },
       error: userError,
@@ -20,11 +20,7 @@ function Login() {
       return
     }
 
-    // Check faculty profile first
-    const {
-      data: faculty,
-      error: facultyError,
-    } = await supabase
+    const { data: faculty, error: facultyError } = await supabase
       .from('faculties')
       .select('id, name, college_name, college_email, college_domain')
       .eq('auth_user_id', user.id)
@@ -32,24 +28,16 @@ function Login() {
 
     if (facultyError) {
       console.error('Faculty profile lookup failed:', facultyError)
+      setError('Unable to load your faculty profile. Please try again.')
       return
     }
 
     if (faculty) {
-      console.log('Faculty profile exists:', faculty)
-
-      navigate('/faculty/dashboard', {
-        replace: true,
-      })
-
+      navigate('/faculty/dashboard', { replace: true })
       return
     }
 
-    // Check student profile
-    const {
-      data: student,
-      error: studentError,
-    } = await supabase
+    const { data: student, error: studentError } = await supabase
       .from('students')
       .select('id, name, roll_number, email')
       .eq('auth_user_id', user.id)
@@ -57,52 +45,39 @@ function Login() {
 
     if (studentError) {
       console.error('Student profile lookup failed:', studentError)
+      setError('Unable to load your student profile. Please try again.')
       return
     }
 
     if (student) {
-      console.log('Student profile exists:', student)
-
-      navigate('/student/dashboard', {
-        replace: true,
-      })
-
+      navigate('/student/dashboard', { replace: true })
       return
     }
 
-    // Authenticated user has neither profile
-    console.log('Authenticated user has no faculty or student profile')
-
-    navigate('/account/setup', {
-      replace: true,
-    })
-  }
+    navigate('/account/setup', { replace: true })
+  }, [navigate])
 
   useEffect(() => {
     checkUserProfile()
-  }, [])
+  }, [checkUserProfile])
 
   async function handleSubmit(event) {
     event.preventDefault()
-
     setError('')
     setLoading(true)
 
-    const { error } = await supabase.auth.signInWithPassword({
+    const { error: signInError } = await supabase.auth.signInWithPassword({
       email,
       password,
     })
 
-    if (error) {
-      setError(error.message)
+    if (signInError) {
+      setError(signInError.message)
       setLoading(false)
       return
     }
 
-    console.log('Login successful')
-
     await checkUserProfile()
-
     setLoading(false)
   }
 
@@ -110,38 +85,43 @@ function Login() {
     setError('')
     setLoading(true)
 
-    const { error } = await supabase.auth.signInWithOAuth({
+    const { error: signInError } = await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: {
-        redirectTo: window.location.origin,
+        redirectTo: `${window.location.origin}/login`,
       },
     })
 
-    if (error) {
-      setError(error.message)
+    if (signInError) {
+      setError(signInError.message)
       setLoading(false)
     }
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center px-4">
-      <div className="w-full max-w-md">
+    <main className="flex min-h-screen items-center justify-center bg-[#E9EDE5] px-4 py-12 text-[#26332D]">
+      <div className="w-full max-w-md rounded-3xl border border-[#B9BDB3] bg-[#F7F4EA] p-8 shadow-xl shadow-[#26332D]/10 sm:p-10">
+        <Link to="/" className="mb-8 inline-block text-sm font-medium text-[#68785B] hover:text-[#26332D]">
+          ← Back to NPC
+        </Link>
 
-        <h1 className="text-3xl font-bold text-center mb-8">
-          Login
-        </h1>
+        <div className="mb-8 text-center">
+          <p className="mb-2 text-sm font-semibold uppercase tracking-[0.18em] text-[#B66E52]">
+            No Phones, Class
+          </p>
+          <h1 className="text-3xl font-bold">Login</h1>
+          <p className="mt-2 text-sm text-[#26332D]/65">
+            Sign in to continue to your classroom portal.
+          </p>
+        </div>
 
-        <form
-          onSubmit={handleSubmit}
-          className="space-y-4"
-        >
-
+        <form onSubmit={handleSubmit} className="space-y-4">
           <input
             type="email"
             placeholder="Email"
             value={email}
             onChange={(event) => setEmail(event.target.value)}
-            className="w-full border rounded-lg px-4 py-3"
+            className="w-full rounded-xl border border-[#B9BDB3] bg-white/70 px-4 py-3 outline-none transition focus:border-[#68785B] focus:ring-2 focus:ring-[#68785B]/20"
             disabled={loading}
             required
           />
@@ -151,13 +131,13 @@ function Login() {
             placeholder="Password"
             value={password}
             onChange={(event) => setPassword(event.target.value)}
-            className="w-full border rounded-lg px-4 py-3"
+            className="w-full rounded-xl border border-[#B9BDB3] bg-white/70 px-4 py-3 outline-none transition focus:border-[#68785B] focus:ring-2 focus:ring-[#68785B]/20"
             disabled={loading}
             required
           />
 
           {error && (
-            <p className="text-sm text-red-600">
+            <p className="rounded-lg bg-[#B66E52]/10 px-3 py-2 text-sm text-[#9A4933]">
               {error}
             </p>
           )}
@@ -165,60 +145,49 @@ function Login() {
           <button
             type="submit"
             disabled={loading}
-            className="w-full rounded-lg bg-black text-white py-3 font-medium disabled:opacity-50"
+            className="w-full rounded-xl bg-[#26332D] py-3 font-semibold text-[#F7F4EA] transition hover:bg-[#3A4A40] disabled:opacity-50"
           >
             {loading ? 'Signing in...' : 'Login'}
           </button>
-
         </form>
 
-        <div className="relative flex items-center my-6">
-          <div className="flex-grow border-t" />
-
-          <span className="px-3 text-sm text-gray-500">
-            OR
-          </span>
-
-          <div className="flex-grow border-t" />
+        <div className="my-6 flex items-center gap-3">
+          <div className="h-px flex-1 bg-[#B9BDB3]" />
+          <span className="text-xs font-medium text-[#26332D]/50">OR</span>
+          <div className="h-px flex-1 bg-[#B9BDB3]" />
         </div>
 
         <button
           type="button"
           onClick={handleGoogleLogin}
           disabled={loading}
-          className="w-full rounded-lg border py-3 font-medium disabled:opacity-50"
+          className="w-full rounded-xl border border-[#B9BDB3] bg-white/50 py-3 font-semibold transition hover:bg-white disabled:opacity-50"
         >
           Continue with Google
         </button>
 
-        <div className="text-center mt-6 space-y-3">
-          <p className="text-gray-600">
-            New here?
-          </p>
-
-          <div className="flex items-center justify-center gap-4 text-sm">
+        <div className="mt-7 text-center">
+          <p className="text-sm text-[#26332D]/65">New here?</p>
+          <div className="mt-3 flex flex-wrap items-center justify-center gap-x-3 gap-y-2 text-sm">
             <button
               type="button"
               onClick={() => navigate('/register')}
-              className="font-medium underline"
+              className="font-semibold text-[#526247] underline underline-offset-4 hover:text-[#26332D]"
             >
               Faculty Registration
             </button>
-
-            <span className="text-gray-400">|</span>
-
+            <span className="text-[#B9BDB3]">|</span>
             <button
               type="button"
               onClick={() => navigate('/student/register')}
-              className="font-medium underline"
+              className="font-semibold text-[#526247] underline underline-offset-4 hover:text-[#26332D]"
             >
               Student Registration
             </button>
           </div>
         </div>
-
       </div>
-    </div>
+    </main>
   )
 }
 

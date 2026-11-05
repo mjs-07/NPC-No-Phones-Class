@@ -779,7 +779,7 @@ function StudentDashboard() {
    */
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="npc-dashboard min-h-screen bg-gray-50">
       {/* HEADER */}
       <header className="border-b bg-white">
         <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">

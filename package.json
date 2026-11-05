@@ -12,15 +12,17 @@
   "dependencies": {
     "@supabase/supabase-js": "^2.114.0",
     "@tailwindcss/vite": "^4.3.3",
+    "animejs": "^4.5.0",
     "html5-qrcode": "^2.3.8",
     "qrcode": "^1.5.4",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-router-dom": "^7.18.3",
-    "tailwindcss": "^4.3.3"
+    "tailwindcss": "^4.3.3",
+    "three": "^0.187.0"
   },
   "devDependencies": {
-    "@eslint/js": "^10.0.1",
+    "@eslint/js": "^9.39.5",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
     "@vitejs/plugin-react": "^6.1.0",
