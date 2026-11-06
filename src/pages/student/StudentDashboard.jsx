@@ -1,3 +1,4 @@
+//StudentDashboard.jsx
 import {
   useCallback,
   useEffect,
@@ -14,6 +15,9 @@ function StudentDashboard() {
 
   const [student, setStudent] = useState(null)
   const [activeParticipation, setActiveParticipation] = useState(null)
+  const [facultyPaused, setFacultyPaused] = useState(false)
+  const [facultyPausedAt, setFacultyPausedAt] = useState(null)
+  const [classroomNotification, setClassroomNotification] = useState('')
 
   const [loading, setLoading] = useState(true)
   const [showScanner, setShowScanner] = useState(false)
@@ -22,6 +26,18 @@ function StudentDashboard() {
 
   const participationEventQueue = useRef(Promise.resolve())
   const forcedLogoutInProgress = useRef(false)
+  const activeParticipationRef = useRef(null)
+  const classroomPauseStateRef = useRef(false)
+
+  // Keep refs current without rebuilding the Realtime subscription.
+  activeParticipationRef.current = activeParticipation
+  classroomPauseStateRef.current = facultyPaused
+
+  useEffect(() => {
+    if (!classroomNotification) return undefined
+    const timer = window.setTimeout(() => setClassroomNotification(''), 7000)
+    return () => window.clearTimeout(timer)
+  }, [classroomNotification])
 
   /*
    * ------------------------------------------------------------
@@ -256,6 +272,7 @@ function StudentDashboard() {
 
     if (
       !participation ||
+      facultyPaused ||
       !['ACTIVE', 'PAUSED'].includes(participation.status)
     ) {
       return undefined
@@ -288,7 +305,130 @@ function StudentDashboard() {
 
       window.clearInterval(heartbeatTimer)
     }
-  }, [activeParticipation, sendParticipationEvent])
+  }, [activeParticipation, facultyPaused, sendParticipationEvent])
+
+  // Load and subscribe to the classroom-wide pause state.
+  // The channel is created once per session ID. It is deliberately NOT
+  // dependent on facultyPaused or the participation object, so a pause
+  // event cannot tear down and recreate the channel while it is handling
+  // the event.
+  useEffect(() => {
+    const sessionId = activeParticipation?.session_id
+    if (!sessionId) {
+      setFacultyPaused(false)
+      setFacultyPausedAt(null)
+      classroomPauseStateRef.current = false
+      return undefined
+    }
+
+    let cancelled = false
+    let receivedRealtimeUpdate = false
+
+    const applyClassroomState = (updated, source = 'realtime') => {
+      if (!updated) return
+
+      const wasPaused = classroomPauseStateRef.current
+      const isPaused = updated.faculty_paused === true
+
+      if (wasPaused !== isPaused) {
+        const message = isPaused
+          ? 'Your faculty has paused the entire classroom.'
+          : 'Your faculty has resumed the classroom. Normal monitoring has restarted.'
+
+        setClassroomNotification(message)
+
+        if ('Notification' in window && Notification.permission === 'granted') {
+          try {
+            new Notification(
+              isPaused ? 'NPC: Classroom paused' : 'NPC: Classroom resumed',
+              { body: message }
+            )
+          } catch (notificationError) {
+            console.warn('Desktop notification could not be displayed:', notificationError)
+          }
+        }
+      }
+
+      classroomPauseStateRef.current = isPaused
+      setFacultyPaused(isPaused)
+      setFacultyPausedAt(updated.faculty_paused_at || null)
+
+      // When resumed, immediately restart the visible heartbeat. The server
+      // also checks faculty_paused, so this is safe if events overlap.
+      if (wasPaused && !isPaused && document.visibilityState === 'visible') {
+        const currentParticipation = activeParticipationRef.current
+        if (currentParticipation?.session_id === sessionId) {
+          void sendParticipationEvent('visible', currentParticipation)
+          void sendParticipationEvent('heartbeat', currentParticipation)
+        }
+      }
+
+      if (source === 'realtime') {
+        console.info('NPC classroom state received through Realtime:', {
+          sessionId,
+          facultyPaused: isPaused,
+        })
+      }
+    }
+
+    const loadClassroomState = async () => {
+      const { data, error } = await supabase
+        .from('sessions')
+        .select('id, status, faculty_paused, faculty_paused_at')
+        .eq('id', sessionId)
+        .maybeSingle()
+
+      if (cancelled) return
+      if (error) {
+        console.error('Classroom pause state lookup failed:', error)
+        return
+      }
+
+      // Initial load establishes the baseline; do not show a notification
+      // merely because the student opened the page while already paused.
+      // Do not overwrite a newer Realtime event if the fetch raced with it.
+      if (!receivedRealtimeUpdate) {
+        classroomPauseStateRef.current = data?.faculty_paused === true
+        setFacultyPaused(data?.faculty_paused === true)
+        setFacultyPausedAt(data?.faculty_paused_at || null)
+      }
+    }
+
+    void loadClassroomState()
+
+    const channel = supabase
+      .channel(`student-classroom-state-${sessionId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'sessions',
+          filter: `id=eq.${sessionId}`,
+        },
+        (payload) => {
+          // Ignore unrelated session updates; only the classroom pause
+          // fields affect the student's classroom state.
+          if (!payload?.new) return
+          receivedRealtimeUpdate = true
+          applyClassroomState(payload.new, 'realtime')
+        }
+      )
+      .subscribe((status, error) => {
+        if (status === 'SUBSCRIBED') {
+          console.info(`NPC classroom Realtime connected for session ${sessionId}`)
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          console.error('NPC classroom Realtime subscription failed:', status, error)
+        } else if (status === 'CLOSED') {
+          console.warn('NPC classroom Realtime channel closed:', sessionId)
+        }
+      })
+
+    return () => {
+      cancelled = true
+      void supabase.removeChannel(channel)
+    }
+  }, [activeParticipation?.session_id, sendParticipationEvent])
 
   /*
    * ------------------------------------------------------------
@@ -805,6 +945,11 @@ function StudentDashboard() {
 
       {/* MAIN */}
       <main className="max-w-6xl mx-auto px-6 py-8">
+        {classroomNotification && (
+          <div role="status" aria-live="polite" className="mb-5 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-medium text-blue-800">
+            {classroomNotification}
+          </div>
+        )}
         {/* STUDENT INFORMATION */}
         <div className="mb-8">
           <h2 className="text-3xl font-bold">
@@ -839,26 +984,31 @@ function StudentDashboard() {
             {activeParticipation ? (
               <div className="mt-4 space-y-4">
                 <div className="flex items-center gap-2">
-                  <span
-                    className={
-                      activeParticipation.status === 'PAUSED'
-                        ? 'h-3 w-3 rounded-full bg-yellow-500'
-                        : 'h-3 w-3 rounded-full bg-green-500'
-                    }
-                  />
-
+                  <span className={`h-3 w-3 rounded-full ${facultyPaused || activeParticipation.status === 'PAUSED' ? 'bg-yellow-500' : 'bg-green-500'}`} />
                   <span className="font-medium">
-                    {activeParticipation.status === 'PAUSED'
-                      ? 'Session Paused'
-                      : 'Session Active'}
+                    {facultyPaused
+                      ? 'Classroom Paused by Faculty'
+                      : activeParticipation.status === 'PAUSED'
+                        ? 'Your Individual Pause is Active'
+                        : 'Session Active'}
                   </span>
                 </div>
 
                 <p className="text-sm text-gray-500">
-                  {activeParticipation.status === 'PAUSED'
-                    ? 'Your classroom participation is currently paused.'
-                    : 'You have successfully joined the classroom session.'}
+                  {facultyPaused
+                    ? 'The faculty has paused the entire classroom. You remain logged in. Tab-switch monitoring and individual pause requests are temporarily suspended.'
+                    : activeParticipation.status === 'PAUSED'
+                      ? 'Your individual classroom participation is currently paused.'
+                      : 'You have successfully joined the classroom session.'}
                 </p>
+
+                {facultyPaused && (
+                  <div className="rounded-lg border border-yellow-200 bg-yellow-50 p-4 text-sm text-yellow-800">
+                    <p className="font-semibold">Classroom-wide pause</p>
+                    <p className="mt-1">Please wait. Your session will continue when your faculty resumes the classroom.</p>
+                    {facultyPausedAt && <p className="mt-2 text-xs">Paused at: {new Date(facultyPausedAt).toLocaleTimeString()}</p>}
+                  </div>
+                )}
 
                 <div className="rounded-lg bg-gray-50 p-4">
                   <p className="text-xs text-gray-400">
@@ -872,11 +1022,26 @@ function StudentDashboard() {
                   </p>
                 </div>
 
-                <StudentPausePanel
-                  participation={activeParticipation}
-                  onParticipationUpdate={setActiveParticipation}
-                  onLoggedOut={handlePauseLogout}
-                />
+                {'Notification' in window && Notification.permission !== 'granted' && (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      const permission = await Notification.requestPermission()
+                      if (permission === 'granted') setClassroomNotification('Desktop notifications enabled.')
+                    }}
+                    className="rounded-md border px-3 py-2 text-xs font-medium hover:bg-gray-50"
+                  >
+                    Enable desktop notifications
+                  </button>
+                )}
+
+                {!facultyPaused && (
+                  <StudentPausePanel
+                    participation={activeParticipation}
+                    onParticipationUpdate={setActiveParticipation}
+                    onLoggedOut={handlePauseLogout}
+                  />
+                )}
               </div>
             ) : (
               <div className="mt-4">

@@ -1,3 +1,4 @@
+//student-heartbeat/index.ts
 import "@supabase/functions-js/edge-runtime.d.ts";
 import { withSupabase } from "npm:@supabase/server@1";
 
@@ -119,6 +120,32 @@ export default {
         );
       }
 
+      // Read the classroom-level pause state before processing any
+      // visibility event. A faculty-wide pause must never trigger
+      // tab-switch logout for a student.
+      const { data: classroom, error: classroomError } =
+        await ctx.supabaseAdmin
+          .from("sessions")
+          .select("status, faculty_paused")
+          .eq("id", session_id)
+          .maybeSingle();
+
+      if (classroomError) {
+        console.error("Classroom state lookup failed:", classroomError);
+
+        return Response.json(
+          { error: "Unable to verify classroom state" },
+          { status: 500 }
+        );
+      }
+
+      if (!classroom || classroom.status !== "ACTIVE") {
+        return Response.json(
+          { error: "Classroom session is no longer active", status: "SESSION_ENDED" },
+          { status: 409 }
+        );
+      }
+
       if (!["ACTIVE", "PAUSED"].includes(participant.status)) {
         return Response.json(
           {
@@ -128,6 +155,37 @@ export default {
           },
           { status: 409 }
         );
+      }
+
+      // Faculty-wide pause takes precedence over all student visibility
+      // events. Keep the participation alive and do not inspect hidden_at.
+      if (classroom.faculty_paused === true) {
+        const { error: pausedHeartbeatError } =
+          await ctx.supabaseAdmin
+            .from("session_participants")
+            .update({ last_seen: nowIso })
+            .eq("id", participant.id)
+            .eq("student_id", student.id)
+            .in("status", ["ACTIVE", "PAUSED"]);
+
+        if (pausedHeartbeatError) {
+          console.error(
+            "Faculty-paused heartbeat update failed:",
+            pausedHeartbeatError
+          );
+
+          return Response.json(
+            { error: "Unable to record heartbeat during classroom pause" },
+            { status: 500 }
+          );
+        }
+
+        return Response.json({
+          success: true,
+          participant_id: participant.id,
+          status: participant.status,
+          faculty_paused: true,
+        });
       }
 
       // Approved pause is not treated as a tab-switch violation.
@@ -307,6 +365,40 @@ export default {
 
         if (remaining > 0) {
           await delay(remaining);
+        }
+
+        // The faculty may have paused the classroom while this request
+        // was waiting. Re-check before enforcing logout.
+        const { data: latestClassroom, error: latestClassroomError } =
+          await ctx.supabaseAdmin
+            .from("sessions")
+            .select("status, faculty_paused")
+            .eq("id", session_id)
+            .maybeSingle();
+
+        if (latestClassroomError) {
+          console.error(
+            "Classroom re-check failed after grace period:",
+            latestClassroomError
+          );
+
+          return Response.json(
+            { error: "Unable to re-check classroom state" },
+            { status: 500 }
+          );
+        }
+
+        if (
+          !latestClassroom ||
+          latestClassroom.status !== "ACTIVE" ||
+          latestClassroom.faculty_paused === true
+        ) {
+          return Response.json({
+            success: true,
+            status: participant.status,
+            faculty_paused: latestClassroom?.faculty_paused === true,
+            hidden: false,
+          });
         }
 
         const enforcementTime = new Date();

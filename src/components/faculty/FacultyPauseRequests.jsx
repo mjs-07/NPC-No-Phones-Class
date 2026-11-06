@@ -6,6 +6,8 @@ function FacultyPauseRequests({ sessionId, participants = [] }) {
   const [loading, setLoading] = useState(false)
   const [processingId, setProcessingId] = useState(null)
   const [errorMessage, setErrorMessage] = useState('')
+  const [notification, setNotification] = useState('')
+  const [notificationPermission, setNotificationPermission] = useState(() => ('Notification' in window ? Notification.permission : 'unsupported'))
 
   const participantById = useMemo(
     () =>
@@ -17,6 +19,12 @@ function FacultyPauseRequests({ sessionId, participants = [] }) {
       ),
     [participants]
   )
+
+  useEffect(() => {
+    if (!notification) return undefined
+    const timer = window.setTimeout(() => setNotification(''), 6000)
+    return () => window.clearTimeout(timer)
+  }, [notification])
 
   async function loadRequests() {
     if (!sessionId) {
@@ -35,16 +43,8 @@ function FacultyPauseRequests({ sessionId, participants = [] }) {
       .order('requested_at', { ascending: false })
 
     if (error) {
-    console.error('Pause request lookup failed:', {
-        message: error.message,
-        code: error.code,
-        details: error.details,
-        hint: error.hint,
-    })
-
-    setErrorMessage(
-        `${error.message} | Code: ${error.code || 'N/A'}`
-    )
+      console.error('Pause request lookup failed:', error)
+      setErrorMessage('Unable to load pause requests.')
     } else {
       setRequests(data || [])
       setErrorMessage('')
@@ -73,17 +73,9 @@ function FacultyPauseRequests({ sessionId, participants = [] }) {
       if (cancelled) return
 
       if (error) {
-        console.error('Pause request lookup failed:', {
-            message: error.message,
-            code: error.code,
-            details: error.details,
-            hint: error.hint,
-        })
-
-        setErrorMessage(
-            `${error.message} | Code: ${error.code || 'N/A'}`
-        )
-    } else {
+        console.error('Pause request lookup failed:', error)
+        setErrorMessage('Unable to load pause requests.')
+      } else {
         setRequests(data || [])
         setErrorMessage('')
       }
@@ -101,7 +93,17 @@ function FacultyPauseRequests({ sessionId, participants = [] }) {
           table: 'pause_requests',
           filter: `session_id=eq.${sessionId}`,
         },
-        () => {
+        (payload) => {
+          if (payload.eventType === 'INSERT' && payload.new?.status === 'PENDING') {
+            const request = payload.new
+            const label = request.reason ? `: ${request.reason}` : ''
+            setNotification(`New pause request received${label}`)
+            if ('Notification' in window && Notification.permission === 'granted') {
+              new Notification('NPC: New pause request', {
+                body: `A student requested a ${Number(request.duration_seconds || 0) / 60}-minute pause${label}`,
+              })
+            }
+          }
           void loadRequests()
         }
       )
@@ -138,6 +140,7 @@ function FacultyPauseRequests({ sessionId, participants = [] }) {
         throw new Error('The pause request was not processed.')
       }
 
+      setNotification(approve ? 'Pause request approved.' : 'Pause request rejected.')
       await loadRequests()
     } catch (error) {
       console.error('Pause request response failed:', error)
@@ -152,30 +155,41 @@ function FacultyPauseRequests({ sessionId, participants = [] }) {
   const pendingRequests = requests.filter(
     (request) => request.status === 'PENDING'
   )
-
   const previousRequests = requests.filter(
     (request) => request.status !== 'PENDING'
   )
 
   function studentLabel(request) {
     const participant = participantById.get(request.participant_id)
-
-    if (!participant) {
-      return `Student ${request.student_id.slice(0, 8)}`
-    }
-
+    if (!participant) return `Student ${request.student_id.slice(0, 8)}`
     return `${participant.student_name} (${participant.roll_number})`
   }
 
   return (
     <section className="rounded-xl border bg-white p-6 md:col-span-3">
+      {notification && (
+        <div role="status" aria-live="polite" className="mb-4 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-medium text-blue-800">
+          {notification}
+        </div>
+      )}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h3 className="text-lg font-semibold">Pause Requests</h3>
-
           <p className="mt-1 text-sm text-gray-500">
             Review student requests for a temporary pause.
           </p>
+          {'Notification' in window && notificationPermission !== 'granted' && (
+            <button
+              type="button"
+              onClick={async () => {
+                const permission = await Notification.requestPermission()
+                setNotificationPermission(permission)
+              }}
+              className="mt-2 rounded-md border px-3 py-1.5 text-xs font-medium hover:bg-gray-50"
+            >
+              Enable desktop notifications
+            </button>
+          )}
         </div>
 
         <span className="rounded-full bg-yellow-100 px-3 py-1 text-sm font-semibold text-yellow-800">
@@ -190,9 +204,7 @@ function FacultyPauseRequests({ sessionId, participants = [] }) {
       )}
 
       {loading && requests.length === 0 ? (
-        <p className="mt-5 text-sm text-gray-500">
-          Loading pause requests...
-        </p>
+        <p className="mt-5 text-sm text-gray-500">Loading pause requests...</p>
       ) : pendingRequests.length === 0 ? (
         <p className="mt-5 rounded-lg bg-gray-50 p-4 text-sm text-gray-500">
           There are no pending pause requests.
@@ -206,10 +218,7 @@ function FacultyPauseRequests({ sessionId, participants = [] }) {
             >
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
-                  <p className="font-semibold">
-                    {studentLabel(request)}
-                  </p>
-
+                  <p className="font-semibold">{studentLabel(request)}</p>
                   <p className="mt-1 text-sm text-gray-600">
                     {request.duration_seconds / 60} minute pause
                   </p>
@@ -266,10 +275,7 @@ function FacultyPauseRequests({ sessionId, participants = [] }) {
                 className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-gray-50 p-3 text-sm"
               >
                 <div>
-                  <p className="font-medium">
-                    {studentLabel(request)}
-                  </p>
-
+                  <p className="font-medium">{studentLabel(request)}</p>
                   <p className="text-xs text-gray-500">
                     {request.duration_seconds
                       ? `${request.duration_seconds / 60} minutes`
