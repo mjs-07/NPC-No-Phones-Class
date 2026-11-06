@@ -17,7 +17,6 @@ function StudentDashboard() {
   const [activeParticipation, setActiveParticipation] = useState(null)
   const [facultyPaused, setFacultyPaused] = useState(false)
   const [facultyPausedAt, setFacultyPausedAt] = useState(null)
-  const [classroomNotification, setClassroomNotification] = useState('')
 
   const [loading, setLoading] = useState(true)
   const [showScanner, setShowScanner] = useState(false)
@@ -32,12 +31,6 @@ function StudentDashboard() {
   // Keep refs current without rebuilding the Realtime subscription.
   activeParticipationRef.current = activeParticipation
   classroomPauseStateRef.current = facultyPaused
-
-  useEffect(() => {
-    if (!classroomNotification) return undefined
-    const timer = window.setTimeout(() => setClassroomNotification(''), 7000)
-    return () => window.clearTimeout(timer)
-  }, [classroomNotification])
 
   /*
    * ------------------------------------------------------------
@@ -330,25 +323,6 @@ function StudentDashboard() {
       const wasPaused = classroomPauseStateRef.current
       const isPaused = updated.faculty_paused === true
 
-      if (wasPaused !== isPaused) {
-        const message = isPaused
-          ? 'Your faculty has paused the entire classroom.'
-          : 'Your faculty has resumed the classroom. Normal monitoring has restarted.'
-
-        setClassroomNotification(message)
-
-        if ('Notification' in window && Notification.permission === 'granted') {
-          try {
-            new Notification(
-              isPaused ? 'NPC: Classroom paused' : 'NPC: Classroom resumed',
-              { body: message }
-            )
-          } catch (notificationError) {
-            console.warn('Desktop notification could not be displayed:', notificationError)
-          }
-        }
-      }
-
       classroomPauseStateRef.current = isPaused
       setFacultyPaused(isPaused)
       setFacultyPausedAt(updated.faculty_paused_at || null)
@@ -384,8 +358,7 @@ function StudentDashboard() {
         return
       }
 
-      // Initial load establishes the baseline; do not show a notification
-      // merely because the student opened the page while already paused.
+      // Initial load establishes the classroom pause-state baseline.
       // Do not overwrite a newer Realtime event if the fetch raced with it.
       if (!receivedRealtimeUpdate) {
         classroomPauseStateRef.current = data?.faculty_paused === true
@@ -945,11 +918,6 @@ function StudentDashboard() {
 
       {/* MAIN */}
       <main className="max-w-6xl mx-auto px-6 py-8">
-        {classroomNotification && (
-          <div role="status" aria-live="polite" className="mb-5 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-medium text-blue-800">
-            {classroomNotification}
-          </div>
-        )}
         {/* STUDENT INFORMATION */}
         <div className="mb-8">
           <h2 className="text-3xl font-bold">
@@ -1021,19 +989,6 @@ function StudentDashboard() {
                     ).toLocaleString()}
                   </p>
                 </div>
-
-                {'Notification' in window && Notification.permission !== 'granted' && (
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      const permission = await Notification.requestPermission()
-                      if (permission === 'granted') setClassroomNotification('Desktop notifications enabled.')
-                    }}
-                    className="rounded-md border px-3 py-2 text-xs font-medium hover:bg-gray-50"
-                  >
-                    Enable desktop notifications
-                  </button>
-                )}
 
                 {!facultyPaused && (
                   <StudentPausePanel

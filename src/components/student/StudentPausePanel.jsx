@@ -8,15 +8,12 @@ function StudentPausePanel({
   onLoggedOut,
 }) {
   const [latestRequest, setLatestRequest] = useState(null)
-  const [durationSeconds, setDurationSeconds] = useState(60)
+  const [durationSeconds, setDurationSeconds] = useState(300)
   const [reason, setReason] = useState('')
   const [loading, setLoading] = useState(false)
   const [requestError, setRequestError] = useState('')
   const [now, setNow] = useState(Date.now())
   const [expiryProcessing, setExpiryProcessing] = useState(false)
-  const [notification, setNotification] = useState('')
-  const [notificationPermission, setNotificationPermission] = useState(() => ('Notification' in window ? Notification.permission : 'unsupported'))
-  const previousRequestRef = useRef(null)
 
   const expiryCheckInProgress = useRef(false)
   const expiryHandled = useRef(false)
@@ -24,12 +21,6 @@ function StudentPausePanel({
   const participantId = participation?.id
   const participationStatus = participation?.status
   const pauseExpiresAt = participation?.pause_expires_at
-
-  useEffect(() => {
-    if (!notification) return undefined
-    const timer = window.setTimeout(() => setNotification(''), 7000)
-    return () => window.clearTimeout(timer)
-  }, [notification])
 
   /*
    * ------------------------------------------------------------
@@ -92,7 +83,6 @@ function StudentPausePanel({
         setRequestError('Unable to load your pause request.')
       } else {
         setLatestRequest(data || null)
-        previousRequestRef.current = data ? { id: data.id, status: data.status } : null
         setRequestError('')
       }
     }
@@ -119,21 +109,10 @@ function StudentPausePanel({
             .maybeSingle()
 
           if (error) {
-            console.error('Pause request notification refresh failed:', error)
+            console.error('Pause request refresh failed:', error)
             return
           }
 
-          const previous = previousRequestRef.current
-          if (data && previous?.id === data.id && previous.status === 'PENDING' && data.status !== 'PENDING') {
-            const message = data.status === 'APPROVED'
-              ? `Your ${Number(data.duration_seconds || 0) / 60}-minute pause request was approved.`
-              : 'Your pause request was rejected by the faculty.'
-            setNotification(message)
-            if ('Notification' in window && Notification.permission === 'granted') {
-              new Notification(data.status === 'APPROVED' ? 'NPC: Pause approved' : 'NPC: Pause rejected', { body: message })
-            }
-          }
-          previousRequestRef.current = data ? { id: data.id, status: data.status } : null
           setLatestRequest(data || null)
           setRequestError('')
         }
@@ -583,24 +562,7 @@ function StudentPausePanel({
     <section className="mt-5 rounded-lg border p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h4 className="font-semibold">Pause Management</h4>
-        {'Notification' in window && notificationPermission !== 'granted' && (
-          <button
-            type="button"
-            onClick={async () => {
-              const permission = await Notification.requestPermission()
-              setNotificationPermission(permission)
-            }}
-            className="rounded-md border px-3 py-1.5 text-xs font-medium hover:bg-gray-50"
-          >
-            Enable desktop notifications
-          </button>
-        )}
       </div>
-      {notification && (
-        <div role="status" aria-live="polite" className="mt-3 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-medium text-blue-800">
-          {notification}
-        </div>
-      )}
 
       {participationStatus === 'PAUSED' ? (
         <div className="mt-3 space-y-3">
@@ -694,7 +656,6 @@ function StudentPausePanel({
                     className="w-full rounded-lg border bg-white px-3 py-2"
                     disabled={loading || participationStatus !== 'ACTIVE'}
                     >
-                    <option value={60}>1 minute (Testing)</option>
                     <option value={300}>5 minutes</option>
                     <option value={600}>10 minutes</option>
                 </select>

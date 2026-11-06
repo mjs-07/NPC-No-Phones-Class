@@ -7,7 +7,6 @@ function FacultyPauseRequests({ sessionId, participants = [] }) {
   const [processingId, setProcessingId] = useState(null)
   const [errorMessage, setErrorMessage] = useState('')
   const [notification, setNotification] = useState('')
-  const [notificationPermission, setNotificationPermission] = useState(() => ('Notification' in window ? Notification.permission : 'unsupported'))
 
   const participantById = useMemo(
     () =>
@@ -98,11 +97,6 @@ function FacultyPauseRequests({ sessionId, participants = [] }) {
             const request = payload.new
             const label = request.reason ? `: ${request.reason}` : ''
             setNotification(`New pause request received${label}`)
-            if ('Notification' in window && Notification.permission === 'granted') {
-              new Notification('NPC: New pause request', {
-                body: `A student requested a ${Number(request.duration_seconds || 0) / 60}-minute pause${label}`,
-              })
-            }
           }
           void loadRequests()
         }
@@ -178,18 +172,6 @@ function FacultyPauseRequests({ sessionId, participants = [] }) {
           <p className="mt-1 text-sm text-gray-500">
             Review student requests for a temporary pause.
           </p>
-          {'Notification' in window && notificationPermission !== 'granted' && (
-            <button
-              type="button"
-              onClick={async () => {
-                const permission = await Notification.requestPermission()
-                setNotificationPermission(permission)
-              }}
-              className="mt-2 rounded-md border px-3 py-1.5 text-xs font-medium hover:bg-gray-50"
-            >
-              Enable desktop notifications
-            </button>
-          )}
         </div>
 
         <span className="rounded-full bg-yellow-100 px-3 py-1 text-sm font-semibold text-yellow-800">
